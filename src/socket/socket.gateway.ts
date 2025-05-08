@@ -9,7 +9,6 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { isError } from 'util';
 
 type ImageData = {
   text: string;
@@ -20,12 +19,12 @@ export class SocketGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   @WebSocketServer() server: Server;
-  private openAiModel: ChatOpenAI;
+  private openAi: ChatOpenAI;
 
   constructor() {
-    this.openAiModel = new ChatOpenAI({
+    this.openAi = new ChatOpenAI({
       openAIApiKey: process.env.OPENAI_API_KEY,
-      model: 'gpt-4o-mini',
+      model: 'gpt-4.1-nano',
       temperature: 0,
     });
   }
@@ -66,14 +65,25 @@ export class SocketGateway
 
     try {
       // Directly invoke the model (without output parser)
-      const result = await this.openAiModel.invoke(prompt);
+      const stream = await this.openAi.stream(prompt);
 
-      // Extract the raw markdown response from the result
-      const markdownResponse = result.content; // The raw markdown response
+      this.server.emit('stram_start', {
+        content: 'stream start',
+        isError: false,
+      });
 
-      // Log and return the result
-      this.server.emit('markdown_response', {
-        markdownResponse,
+      for await (const chunk of stream) {
+        // Process the stream chunk
+        if (chunk) {
+          this.server.emit('stream_response', {
+            content: chunk.content,
+            isError: false,
+          });
+        }
+      }
+
+      this.server.emit('stream_end', {
+        content: 'stream end',
         isError: false,
       });
     } catch (error) {
