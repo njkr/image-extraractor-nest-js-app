@@ -10,8 +10,14 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
-type ImageData = {
+enum dataType {
+  screenShot = 'screenshot',
+  audio = 'audio',
+}
+type Data = {
   text: string;
+  type: dataType;
+  id: string;
 };
 
 @WebSocketGateway({ cors: true })
@@ -43,14 +49,26 @@ export class SocketGateway
     console.log('client disconnected' + client.id);
   }
 
-  @SubscribeMessage('get_answer')
+  @SubscribeMessage('take_screenshot')
   create() {
-    this.server.emit('take_screenshot', 'test_socket');
+    this.server.emit('take_screenshot');
   }
 
-  @SubscribeMessage('image_data_listener')
-  async imageData(@MessageBody() imageData: ImageData) {
+  @SubscribeMessage('recording_event')
+  async recordingEvent(@MessageBody() isRecording: boolean) {
+    this.server.emit('recording_event', isRecording);
+  }
+
+  @SubscribeMessage('recording_event_client')
+  async recordingEventClient(@MessageBody() isRecording: boolean) {
+    this.server.emit('recording_event_client', isRecording);
+  }
+
+  @SubscribeMessage('streaming_event')
+  async imageData(@MessageBody() data: Data) {
     // console.log(imageData.text);
+
+    const { type, id, text } = data;
 
     // Generalize the prompt to instruct the model to return answers in markdown format
     const prompt = `
@@ -58,7 +76,7 @@ export class SocketGateway
   
     Your task is to respond in markdown format, no matter the type of question. This could include explanations, bullet points, lists, code snippets, or any other relevant format. Be sure to structure the response clearly in markdown.
   
-    Question: ${imageData.text}
+    Question: ${text}
   
     Answer in markdown:
     `;
@@ -67,9 +85,13 @@ export class SocketGateway
       // Directly invoke the model (without output parser)
       const stream = await this.openAi.stream(prompt);
 
-      this.server.emit('stram_start', {
-        content: 'stream start',
+      this.server.emit('stream_response', {
+        question: text,
         isError: false,
+        type,
+        id,
+        status: 'start',
+        createdAt: new Date().toISOString(),
       });
 
       for await (const chunk of stream) {
@@ -78,18 +100,29 @@ export class SocketGateway
           this.server.emit('stream_response', {
             content: chunk.content,
             isError: false,
+            type,
+            id,
+            status: 'streaming',
+            date: new Date().toISOString(),
           });
         }
       }
 
-      this.server.emit('stream_end', {
-        content: 'stream end',
+      this.server.emit('stream_response', {
         isError: false,
+        type,
+        id,
+        status: 'end',
+        date: new Date().toISOString(),
       });
     } catch (error) {
-      this.server.emit('markdown_response', {
-        markdownResponse: error.message,
-        isError: false,
+      this.server.emit('stream_response', {
+        content: error.message,
+        isError: true,
+        type,
+        id,
+        status: 'end',
+        date: new Date().toISOString(),
       });
       console.error('Error invoking LangChain model:', error);
     }
